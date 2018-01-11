@@ -252,7 +252,7 @@ class InlineModelFormList(InlineFieldList):
         self.prop = prop
         self.inline_view = inline_view
 
-        self._pk = get_primary_key(model)
+        self._pk = self.get_primary_key(model)
 
         # Generate inline form field
         form_opts = FormOpts(widget_args=getattr(inline_view, 'form_widget_args', None),
@@ -265,19 +265,33 @@ class InlineModelFormList(InlineFieldList):
     def display_row_controls(self, field):
         return field.get_pk() is not None
 
+    def get_primary_key(self, model):
+
+        mapper = model._sa_class_manager.mapper
+        pks = [mapper.get_property_by_column(c).key for c in mapper.primary_key]
+        if len(pks) > 0:
+            return tuple(pks)
+        else:
+            return None
+
+    def get_field_id(self, field, obj):
+        """
+        get and format id from field
+        :rtype: text_type
+        """
+        field_id = field.get_pk(obj, self.model)
+        return tuple(text_type(_) for _ in field_id)
+
     def populate_obj(self, obj, name):
         values = getattr(obj, name, None)
-
         if values is None:
             return
 
-        # Create primary key map
-        pk_map = dict((str(getattr(v, self._pk)), v) for v in values)
+        pk_map = dict((get_obj_pk(v, self._pk), v) for v in values)
 
-        # Handle request data
         for field in self.entries:
-            field_id = str(field.get_pk())
 
+            field_id = self.get_field_id(field, obj)
             is_created = field_id not in pk_map
             if not is_created:
                 model = pk_map[field_id]
@@ -285,16 +299,26 @@ class InlineModelFormList(InlineFieldList):
                 if self.should_delete(field):
                     self.session.delete(model)
                     continue
+                field.populate_obj(model, None)
             else:
                 model = self.model()
+                field.populate_obj(model, None)
                 values.append(model)
-
-            field.populate_obj(model, None)
 
             self.inline_view._on_model_change(field, model, is_created)
 
 
-def get_pk_from_identity(obj):
+def get_pk_from_identity(self, obj):
     # TODO: Remove me
-    key = identity_key(instance=obj)[1]
+    cls, key = identity_key(instance=obj)
     return u':'.join(text_type(x) for x in key)
+
+
+def get_obj_pk(obj, pk):
+    """
+    get and format pk from obj
+    :rtype: text_type
+    """
+
+    return tuple(text_type(getattr(obj, k)) for k in pk)
+
