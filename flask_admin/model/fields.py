@@ -117,8 +117,32 @@ class InlineModelFormField(FormField):
         self._pk = pk
         self.form_opts = form_opts
 
-    def get_pk(self):
-        return getattr(self.form, self._pk).data
+    def get_pk(self, obj=None, model=None):
+
+        pks = []
+        for pk in self._pk:
+            if getattr(self.form, pk).data == '':
+                for elem in getattr(model, pk).prop.columns[0].foreign_keys:
+                    # check if the
+                    if obj.__table__ == [elem for elem in getattr(model, pk).prop.columns[0].foreign_keys][
+                        0].column.table:
+                        pks.append(obj.id)
+                    else:
+                        for d in self.data:
+                            if hasattr(self.data[d], '__table__'):
+                                if self.data[d].__table__ == \
+                                        [elem for elem in getattr(model, pk).prop.columns[0].foreign_keys][
+                                            0].column.table:
+                                    pks.append(getattr(self.data[d], pk))
+            elif getattr(self.form, pk).data != '':
+                pks.append(getattr(self.form, pk).data)
+        return tuple(pks)
+
+    def populate_obj(self, obj, name):
+        for name, field in iteritems(self.form._fields):
+            if name not in self._pk:
+                field.populate_obj(obj, name)
+
 
     def populate_obj(self, obj, name):
         for name, field in iteritems(self.form._fields):
