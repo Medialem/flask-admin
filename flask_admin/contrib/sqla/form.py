@@ -168,9 +168,7 @@ class AdminModelConverter(ModelConverterBase):
 
             form_columns = getattr(self.view, 'form_columns', None) or ()
 
-            # Do not display foreign keys - use relations, except when explicitly instructed
-            if column.foreign_keys and prop.key not in form_columns:
-                return None
+
 
             # Only display "real" columns
             if not isinstance(column, Column):
@@ -194,6 +192,11 @@ class AdminModelConverter(ModelConverterBase):
                                                            model,
                                                            column))
                         unique = True
+
+            # Do not display foreign keys - use relations, except when explicitly instructed
+            # In case of primary key/ foreignkey used in inhertiance,
+            if column.foreign_keys and prop.key not in form_columns:
+                return None
 
             # If field is unique, validate it
             if column.unique and not unique:
