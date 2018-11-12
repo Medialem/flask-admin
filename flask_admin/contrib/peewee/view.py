@@ -184,6 +184,10 @@ class ModelView(BaseModelView):
         return get_primary_key(self.model)
 
     def get_pk_value(self, model):
+        if self.model._meta.composite_key:
+            return tuple([
+                model._data[field_name]
+                for field_name in self.model._meta.primary_key.field_names])
         return getattr(model, self._primary_key)
 
     def scaffold_list_columns(self):
@@ -234,8 +238,14 @@ class ModelView(BaseModelView):
             raise Exception('Failed to find field for filter: %s' % name)
 
         # Check if field is in different model
-        if attr.model_class != self.model:
-            visible_name = '%s / %s' % (self.get_column_name(attr.model_class.__name__),
+        model_class = None
+        try:
+            model_class = attr.model_class
+        except AttributeError:
+            model_class = attr.model
+
+        if model_class != self.model:
+            visible_name = '%s / %s' % (self.get_column_name(model_class.__name__),
                                         self.get_column_name(attr.name))
         else:
             if not isinstance(name, string_types):
@@ -307,26 +317,42 @@ class ModelView(BaseModelView):
         return create_ajax_loader(self.model, name, name, options)
 
     def _handle_join(self, query, field, joins):
-        if field.model_class != self.model:
-            model_name = field.model_class.__name__
+        model_class = None
+        try:
+            model_class = field.model_class
+        except AttributeError:
+            model_class = field.model
+        if model_class != self.model:
+            model_name = model_class.__name__
 
             if model_name not in joins:
-                query = query.join(field.model_class, JOIN.LEFT_OUTER)
+                query = query.join(model_class, JOIN.LEFT_OUTER)
                 joins.add(model_name)
-
         return query
 
-    def _order_by(self, query, joins, sort_field, sort_desc):
+    def _order_by(self, query, joins, order):
+        clauses = []
+        for sort_field, sort_desc in order:
+            query, joins, clause = self._sort_clause(
+                query, joins, sort_field, sort_desc)
+            clauses.append(clause)
+        query = query.order_by(*clauses)
+        return query, joins
+
+    def _sort_clause(self, query, joins, sort_field, sort_desc):
         if isinstance(sort_field, string_types):
             field = getattr(self.model, sort_field)
-            query = query.order_by(field.desc() if sort_desc else field.asc())
         elif isinstance(sort_field, Field):
-            if sort_field.model_class != self.model:
+            model_class = None
+            try:
+                model_class = sort_field.model_class
+            except AttributeError:
+                model_class = sort_field.model
+            if model_class != self.model:
                 query = self._handle_join(query, sort_field, joins)
-
-            query = query.order_by(sort_field.desc() if sort_desc else sort_field.asc())
-
-        return query, joins
+            field = sort_field
+        clause = field.desc() if sort_desc else field.asc()
+        return query, joins, clause
 
     def get_query(self):
         return self.model.select()
@@ -395,13 +421,12 @@ class ModelView(BaseModelView):
         # Apply sorting
         if sort_column is not None:
             sort_field = self._sortable_columns[sort_column]
-
-            query, joins = self._order_by(query, joins, sort_field, sort_desc)
+            order = [(sort_field, sort_desc)]
+            query, joins = self._order_by(query, joins, order)
         else:
             order = self._get_default_order()
-
             if order:
-                query, joins = self._order_by(query, joins, order[0], order[1])
+                query, joins = self._order_by(query, joins, order)
 
         # Pagination
         if page_size is None:
@@ -419,6 +444,8 @@ class ModelView(BaseModelView):
         return count, query
 
     def get_one(self, id):
+        if self.model._meta.composite_key:
+            return self.model.get(**dict(zip(self.model._meta.primary_key.field_names, id)))
         return self.model.get(**{self._primary_key: id})
 
     def create_model(self, form):
