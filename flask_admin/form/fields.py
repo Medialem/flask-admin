@@ -203,6 +203,10 @@ class JSONField(fields.TextAreaField):
                 return
 
             try:
-                self.data = json.loads(valuelist[0])
+                # when using eve with flask admin, eve is giving data directly as dict
+                if isinstance(valuelist[0], dict):
+                    self.data = valuelist[0]
+                else:
+                    self.data = json.loads(valuelist[0])
             except ValueError:
                 raise ValueError(self.gettext('Invalid JSON'))
