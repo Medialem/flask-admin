@@ -90,6 +90,11 @@ class FilterGroup(object):
             copy['operation'] = as_unicode(copy['operation'])
             options = copy['options']
             if options:
+                # This was added because when working outside app context we can't inquire
+                # the db to get specific values being the options to show to the user so as
+                # a solution we send the options as a function that returns a query.
+                if callable(options):
+                    options = options()
                 copy['options'] = [(k, text_type(v)) for k, v in options]
 
             filters.append(copy)
