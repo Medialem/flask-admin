@@ -18,6 +18,7 @@ from sqlalchemy.sql.expression import cast
 from sqlalchemy import Unicode
 
 from flask import current_app, flash
+from flask_babelex import gettext as fb_gettext
 
 from flask_admin._compat import string_types, text_type
 from flask_admin.babel import gettext, ngettext, lazy_gettext
@@ -1125,7 +1126,10 @@ class ModelView(BaseModelView):
             ):
                 raise
             else:
-                flash(gettext('%(class_)s. %(message)s', class_=exc.orig.__class__.__name__, message=text_type(exc)), 'error')
+                flash(
+                    fb_gettext('%(class_)s. %(message)s', class_=exc.orig.__class__.__name__, message=text_type(exc)),
+                    'error'
+                )
             return True
 
         return super(ModelView, self).handle_view_exception(exc)
@@ -1369,9 +1373,10 @@ class ModelView(BaseModelView):
                             elif self.create_object_if_not_exists:
                                 objects.append(class_(**properties_))
                             else:
-                                errors.append(gettext(
-                                    'Failed to find object pertaining to ' + class_.__name__ +
-                                    ' that has the following properties ' + properties.__str__()
+                                errors.append("* " + fb_gettext(
+                                    'Failed to find object pertaining to %(class_name)s'  +
+                                    ' that has the following properties %(properties_as_str)s',
+                                    class_name=class_.__name__, properties_as_str=properties.__str__()
                                 ))
                         return objects, "; ".join(errors)
                     elif isinstance(real_value, dict):
@@ -1382,9 +1387,10 @@ class ModelView(BaseModelView):
                         elif self.create_object_if_not_exists:
                             return class_(**properties_)
                         else:
-                            errors = gettext(
-                                'Failed to find object pertaining to ' + class_.__name__ +
-                                ' that has the following properties ' + real_value.__str__()
+                            errors = "* " + fb_gettext(
+                                'Failed to find object pertaining to %(class_name)s' +
+                                ' that has the following properties %(properties_as_str)s',
+                                class_name=class_.__name__, properties_as_str=real_value.__str__()
                             )
                     return value, errors  # value, errors
 
@@ -1400,6 +1406,10 @@ class ModelView(BaseModelView):
                 obj = query.first()
                 errors_ = []
                 is_there_a_modification = True if obj else False
+
+                # aims to detect if the ongoing operation (Modification/ Insertion) was successfully done or not
+                operation_done = True
+
                 if is_there_a_modification:
                     # Modification
                     for i, key in enumerate(headers):
@@ -1410,8 +1420,8 @@ class ModelView(BaseModelView):
                             if not isinstance(value, tuple) or value[1] is None:
                                 setattr(obj, key, value)
                             else:
+                                operation_done = False
                                 errors_.append(value[1])
-                    writer.writerow(list(row) + ["", False, True, '\n'.join(errors_)])
                 else:
                     # Insertion
                     properties = {}
@@ -1423,19 +1433,21 @@ class ModelView(BaseModelView):
                         if not isinstance(value, tuple) or value[1] is None:
                             properties[key] = value
                         else:
+                            operation_done = False
                             errors_.append(value[1])
-                    writer.writerow(list(row) + ["", True, False, '\n'.join(errors_)])
 
                     obj = self.model(**properties)
                 self.session.add(obj)
                 self.session.commit()
             except Exception as ex:
-                if is_there_a_modification:
-                    writer.writerow(list(row) + ["", False, True, str(ex)])
-                else:
-                    writer.writerow(list(row) + ["", True, False, str(ex)])
+                errors_.append("* " + str(ex))
 
                 self.session.rollback()
+
+            if is_there_a_modification:
+                writer.writerow(list(row) + ["", False, operation_done, '\n'.join(errors_)])
+            else:
+                writer.writerow(list(row) + ["", operation_done, False, '\n'.join(errors_)])
 
         result_as_file.close()
 
