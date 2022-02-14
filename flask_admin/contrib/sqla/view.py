@@ -12,7 +12,7 @@ from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.orm.base import manager_of_class, instance_state
 from sqlalchemy.orm import joinedload, aliased, ColumnProperty
 from sqlalchemy.sql.expression import desc
-from sqlalchemy import Boolean, Table, func, or_, engine
+from sqlalchemy import Boolean, Table, func, or_
 from sqlalchemy.exc import IntegrityError, DataError
 from sqlalchemy.sql.expression import cast
 from sqlalchemy import Unicode
@@ -1286,15 +1286,19 @@ class ModelView(BaseModelView):
                 log.exception('Failed to import file.')
 
             return False
+
         headers = [key.strip() for key in imported_data.headers]
+
         from flask_platform_components import db
         inspector = Inspector.from_engine(db.engine)
+
+        # Get the primary keys of the model in hand
         pks = inspector.get_pk_constraint(self.model.__table__)
         del pks['constrained_columns']
         pks = list(pks.keys())
 
         # Check if the PK is in the column provided in data
-        attrs = set([])
+        attrs = set([])  # aims to hold the attrs names of type ColumnProperty and the attrs names + "_id" else (Rel.P.)
         for attr_name in headers:
             if isinstance(getattr(self.model, attr_name).prop, ColumnProperty):
                 attrs.add(attr_name)
@@ -1317,6 +1321,9 @@ class ModelView(BaseModelView):
             for uc_tuple in inspector.get_unique_constraints(self.model.__table__):
                 del uc_tuple["column_names"]
                 ucs.append(list(uc_tuple.keys()))
+
+            # ucs = [tuple1, tuple2, ...]
+            # Keep only the tuple where all the attributes are in attrs
             existed_tuples_ucs = [uc_tuple for uc_tuple in ucs if any(attr in attrs for attr in uc_tuple)]
             for uc_tuple in existed_tuples_ucs:
                 for attr_name in uc_tuple:
