@@ -1,5 +1,5 @@
 import os
-import json
+import csv
 import ast
 import logging
 import warnings
@@ -13,7 +13,7 @@ from sqlalchemy.orm.base import manager_of_class, instance_state
 from sqlalchemy.orm import joinedload, aliased, ColumnProperty
 from sqlalchemy.sql.expression import desc
 from sqlalchemy import Boolean, Table, func, or_, engine
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, DataError
 from sqlalchemy.sql.expression import cast
 from sqlalchemy import Unicode
 
@@ -1118,6 +1118,15 @@ class ModelView(BaseModelView):
             else:
                 flash(gettext('Integrity error. %(message)s', message=text_type(exc)), 'error')
             return True
+        if isinstance(exc, DataError):
+            if current_app.config.get(
+                'ADMIN_RAISE_ON_INTEGRITY_ERROR',
+                current_app.config.get('ADMIN_RAISE_ON_VIEW_EXCEPTION')
+            ):
+                raise
+            else:
+                flash(gettext('%(class_)s. %(message)s', class_=exc.orig.__class__.__name__, message=text_type(exc)), 'error')
+            return True
 
         return super(ModelView, self).handle_view_exception(exc)
 
@@ -1389,7 +1398,9 @@ class ModelView(BaseModelView):
                     else:
                         query = query.join(getattr(self.model, attr_name)).filter_by(**{attr_name: row_map[attr_name]})
                 obj = query.first()
-                if obj:
+                errors_ = []
+                is_there_a_modification = True if obj else False
+                if is_there_a_modification:
                     # Modification
                     for i, key in enumerate(headers):
                         if hasattr(obj, key):
@@ -1398,9 +1409,9 @@ class ModelView(BaseModelView):
                                 key, row[i].strip())
                             if not isinstance(value, tuple) or value[1] is None:
                                 setattr(obj, key, value)
-                                writer.writerow(list(row) + ["", False, True, ""])
                             else:
-                                writer.writerow(list(row) + ["", False, True, value[1]])
+                                errors_.append(value[1])
+                    writer.writerow(list(row) + ["", False, True, '\n'.join(errors_)])
                 else:
                     # Insertion
                     properties = {}
@@ -1408,19 +1419,21 @@ class ModelView(BaseModelView):
                         value = str2correct_type(row[i].strip()) if isinstance(
                                 getattr(self.model, key).prop, ColumnProperty) else get_objects(
                                 key, row[i].strip())
+
                         if not isinstance(value, tuple) or value[1] is None:
                             properties[key] = value
-                            writer.writerow(list(row) + ["", True, False, ""])
                         else:
-                            writer.writerow(list(row) + ["", True, False, value[1]])
+                            errors_.append(value[1])
+                    writer.writerow(list(row) + ["", True, False, '\n'.join(errors_)])
 
                     obj = self.model(**properties)
                 self.session.add(obj)
                 self.session.commit()
             except Exception as ex:
-                if not self.handle_view_exception(ex):
-                    flash(gettext('Failed to import record. %(error)s', error=str(ex)), 'error')
-                    log.exception('Failed to import record.')
+                if is_there_a_modification:
+                    writer.writerow(list(row) + ["", False, True, str(ex)])
+                else:
+                    writer.writerow(list(row) + ["", True, False, str(ex)])
 
                 self.session.rollback()
 
