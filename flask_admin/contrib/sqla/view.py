@@ -1,12 +1,18 @@
+import os
+import json
+import ast
 import logging
 import warnings
 import inspect
 
+from flask_admin import expose
+from markupsafe import Markup
+from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.orm.base import manager_of_class, instance_state
-from sqlalchemy.orm import joinedload, aliased
+from sqlalchemy.orm import joinedload, aliased, ColumnProperty
 from sqlalchemy.sql.expression import desc
-from sqlalchemy import Boolean, Table, func, or_
+from sqlalchemy import Boolean, Table, func, or_, engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.expression import cast
 from sqlalchemy import Unicode
@@ -1267,11 +1273,149 @@ class ModelView(BaseModelView):
                 log.exception('Failed to import file.')
 
             return False
+        headers = [key.strip() for key in imported_data.headers]
+        from flask_platform_components import db
+        inspector = Inspector.from_engine(db.engine)
+        pks = inspector.get_pk_constraint(self.model.__table__)
+        del pks['constrained_columns']
+        pks = list(pks.keys())
 
+        # Check if the PK is in the column provided in data
+        attrs = set([])
+        for attr_name in headers:
+            if isinstance(getattr(self.model, attr_name).prop, ColumnProperty):
+                attrs.add(attr_name)
+            elif hasattr(self.model, attr_name + "_id"):
+                attrs.add(attr_name + "_id")
+
+        attributes_to_check = []
+        if all(pk in attrs for pk in pks):
+            for pk in pks:
+                if pk in headers:
+                    attributes_to_check.append(pk)
+                else:
+                    # Foreign Key : (pk, )
+                    attributes_to_check.append(
+                        lambda properties_: pk, getattr(
+                            self.model, attr_name).prop.mapper.class_.get_by_identifier(properties_))
+        else:
+            # Check all the unique constraints
+            ucs = []
+            for uc_tuple in inspector.get_unique_constraints(self.model.__table__):
+                del uc_tuple["column_names"]
+                ucs.append(list(uc_tuple.keys()))
+            existed_tuples_ucs = [uc_tuple for uc_tuple in ucs if any(attr in attrs for attr in uc_tuple)]
+            for uc_tuple in existed_tuples_ucs:
+                for attr_name in uc_tuple:
+                    if attr_name in headers:
+                        attributes_to_check.append(attr_name)
+                    else:
+                        # Foreign Key : (pk, )
+                        attributes_to_check.append(
+                            lambda properties_: attr_name, getattr(
+                                self.model, attr_name).prop.mapper.class_.get_by_identifier(properties_))
+
+        if imported_data:
+            f_name = current_app.upload_set_config["documents"].tuple[0] + "/temp.csv"
+            os.remove(f_name)
+            result_as_file = open(f_name, 'w', newline='')
+            writer = csv.writer(result_as_file)
+            writer.writerow(headers + ["", "Created", "Modified", "Errors if they exist"])
         for row in imported_data:
             try:
-                model = self.model(**{key.strip(): row[i].strip() for i, key in enumerate(imported_data.headers)})
-                self.session.add(model)
+                def str2correct_type(string):
+                    """Get a string and try to transform it to a python object.
+
+                    for ex: string = "a" returns "a",
+                            string = "1" returns 1,
+                            string = '{"a": "b"}' returns {"a": "b"},
+                            string = "['s', 1, 'b']" returns ["s", 1, "b"]
+                            ...
+                    """
+                    try:
+                        return ast.literal_eval(string)
+                    except:
+                        return string
+
+                def get_objects(attr_name, value):
+                    """Returns object/objects that are of type attr_name.strip()).prop.mapper.class_.
+
+                    Note: if the object doesn't exist we create a new one if the config :
+                            create_object_if_not_exists is set to True
+                    for ex: if attr_name = professions and attr_name.strip()).prop.mapper.class_ is Profession
+                                and value is {"name": "Profession 1"} then it returns Profession(name="Profession 1")
+                            if instead of that, value is [{"name": "Profession 1"}, {"id": 2}], then it might returns
+                                [Profession(name="Profession 1"), Profession(id=2)]
+                    """
+                    errors = None
+                    objects = []
+                    real_value = str2correct_type(value)
+                    if isinstance(real_value, list):
+                        for properties_ in real_value:
+                            class_ = getattr(self.model, attr_name.strip()).prop.mapper.class_
+                            obj_ = class_.get_by_identifier(**properties_)
+                            errors = []
+                            if obj_:
+                                objects.append(obj_)
+                            elif self.create_object_if_not_exists:
+                                objects.append(class_(**properties_))
+                            else:
+                                errors.append(gettext(
+                                    'Failed to find object pertaining to ' + class_.__name__ +
+                                    ' that has the following properties ' + properties.__str__()
+                                ))
+                        return objects, "; ".join(errors)
+                    elif isinstance(real_value, dict):
+                        class_ = getattr(self.model, attr_name.strip()).prop.mapper.class_
+                        obj_ = class_.get_by_identifier(**real_value)
+                        if obj_:
+                            return obj_
+                        elif self.create_object_if_not_exists:
+                            return class_(**properties_)
+                        else:
+                            errors = gettext(
+                                'Failed to find object pertaining to ' + class_.__name__ +
+                                ' that has the following properties ' + real_value.__str__()
+                            )
+                    return value, errors  # value, errors
+
+                # Try to see if the data provided reflect an existing object so the current operation will
+                # be an operation of modification of that object, or not so the operation will be an insertion
+                query = self.model.query
+                row_map = {key: row[i].strip() for i, key in enumerate(headers)}
+                for attr_name in attributes_to_check:
+                    if not callable(attr_name):
+                        query = query.filter_by(**{attr_name: row_map[attr_name]})
+                    else:
+                        query = query.join(getattr(self.model, attr_name)).filter_by(**{attr_name: row_map[attr_name]})
+                obj = query.first()
+                if obj:
+                    # Modification
+                    for i, key in enumerate(headers):
+                        if hasattr(obj, key):
+                            value = str2correct_type(row[i].strip()) if isinstance(
+                                getattr(self.model, key).prop, ColumnProperty) else get_objects(
+                                key, row[i].strip())
+                            if not isinstance(value, tuple) or value[1] is None:
+                                setattr(obj, key, value)
+                                writer.writerow(list(row) + ["", False, True, ""])
+                            else:
+                                writer.writerow(list(row) + ["", False, True, value[1]])
+                else:
+                    # Insertion
+                    properties = {}
+                    for i, key in enumerate(headers):
+                        value = str2correct_type(row[i].strip()) if isinstance(
+                                getattr(self.model, key).prop, ColumnProperty) else get_objects(
+                                key, row[i].strip())
+                        if not isinstance(value, tuple) or value[1] is None:
+                            properties[key] = value
+                            writer.writerow(list(row) + ["", True, False, ""])
+                        else:
+                            writer.writerow(list(row) + ["", True, False, value[1]])
+
+                    obj = self.model(**properties)
+                self.session.add(obj)
                 self.session.commit()
             except Exception as ex:
                 if not self.handle_view_exception(ex):
@@ -1279,6 +1423,12 @@ class ModelView(BaseModelView):
                     log.exception('Failed to import record.')
 
                 self.session.rollback()
+
+        result_as_file.close()
+
+        flash(Markup(f'''
+        <a href={"/_" + f_name.split("static")[1][1:]} target="_blank" download>Download Result</a>       
+        '''))
 
         return True
 

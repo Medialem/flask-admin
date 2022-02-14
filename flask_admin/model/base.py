@@ -144,6 +144,9 @@ class BaseModelView(BaseView, ActionsMixin):
     can_import = False
     """Is model list import allowed"""
 
+    create_object_if_not_exists = False
+    """Is creating new objects if they do not exist allowed while importing."""
+
     # Templates
     list_template = 'admin/model/list.html'
     """Default list view template"""
