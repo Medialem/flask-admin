@@ -95,7 +95,7 @@ class FilterGroup(object):
                 # a solution we send the options as a function that returns a query.
                 if callable(options):
                     options = options()
-                copy['options'] = [(k, text_type(v)) for k, v in options]
+                copy['options'] = [(k, text_type(str(v))) for k, v in options]
 
             filters.append(copy)
         return as_unicode(self.label), filters
