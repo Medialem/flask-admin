@@ -538,10 +538,23 @@ class FilterConverter(filters.BaseFilterConverter):
     @filters.convert('enum')
     def conv_enum(self, column, name, options=None, **kwargs):
         if not options:
-            options = [
-                (v, fb_lazy_gettext(v))
-                for v in column.type.enums
-            ]
+            try:
+                if hasattr(column.class_, 'get_translatable_attrs') and \
+                        column.key in column.class_.get_translatable_attrs():
+                    def get_options():
+                        return [
+                            (v, fb_lazy_gettext(v))
+                            for v in column.type.enums
+                        ]
+                    options = get_options
+                else:
+                    options = [
+                        (v, v) for v in column.type.enums
+                    ]
+            except Exception as ex:
+                options = [
+                    (v, v) for v in column.type.enums
+                ]
         try:
             from sqlalchemy_enum34 import EnumType
         except ImportError:
