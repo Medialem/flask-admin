@@ -1,3 +1,4 @@
+from flask_babelex import lazy_gettext as fb_lazy_gettext
 from flask_admin.babel import lazy_gettext
 from flask_admin.model import filters
 from flask_admin.contrib.sqla import tools
@@ -538,7 +539,7 @@ class FilterConverter(filters.BaseFilterConverter):
     def conv_enum(self, column, name, options=None, **kwargs):
         if not options:
             options = [
-                (v, v)
+                (v, fb_lazy_gettext(v))
                 for v in column.type.enums
             ]
         try:
