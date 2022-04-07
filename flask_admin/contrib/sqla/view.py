@@ -1269,28 +1269,32 @@ class ModelView(BaseModelView):
         """
         filename = form.import_file.data.filename.lower()
 
-        try:
-            if any([filename.endswith(_format) for _format in self.import_types]):
+        if any([filename.endswith(_format) for _format in self.import_types]):
+            file_content = form.import_file.data.stream.read()
+            try:
                 imported_data = tablib.Dataset().load(
-                    form.import_file.data.stream.read().decode(),
+                    file_content.decode("utf-8"),
                     format=filename.split(".")[-1]
                 )
-            else:
-                flash(gettext('Failed to import file. Not acceptable format'), 'error')
-                log.exception('Failed to import file. Not acceptable format')
-
-                return False
-        except Exception as ex:
-            if not self.handle_view_exception(ex):
-                flash(gettext('Failed to import file. %(error)s', error=str(ex)), 'error')
-                log.exception('Failed to import file.')
+            except UnicodeDecodeError:
+                try:
+                    imported_data = tablib.Dataset().load(
+                        file_content.decode("windows-1252"),
+                        format=filename.split(".")[-1]
+                    )
+                except Exception as ex:
+                    if not self.handle_view_exception(ex):
+                        flash(gettext('Failed to import file. %(error)s', error=str(ex)), 'error')
+                        log.exception('Failed to import file.')
+        else:
+            flash(gettext('Failed to import file. Not acceptable format'), 'error')
+            log.exception('Failed to import file. Not acceptable format')
 
             return False
 
         headers = [key.strip() for key in imported_data.headers]
 
-        from flask_platform_components import db
-        inspector = Inspector.from_engine(db.engine)
+        inspector = Inspector.from_engine(self.session.db.engine)
 
         # Get the primary keys of the model in hand
         pks = inspector.get_pk_constraint(self.model.__table__)
@@ -1313,8 +1317,11 @@ class ModelView(BaseModelView):
                 else:
                     # Foreign Key : (pk, )
                     attributes_to_check.append(
-                        lambda properties_: pk, getattr(
-                            self.model, attr_name).prop.mapper.class_.get_by_identifier(properties_))
+                        lambda properties_: (
+                                pk,
+                                getattr(self.model, attr_name).prop.mapper.class_.get_by_identifier(properties_)
+                            )
+                    )
         else:
             # Check all the unique constraints
             ucs = []
@@ -1332,8 +1339,11 @@ class ModelView(BaseModelView):
                     else:
                         # Foreign Key : (pk, )
                         attributes_to_check.append(
-                            lambda properties_: attr_name, getattr(
-                                self.model, attr_name).prop.mapper.class_.get_by_identifier(properties_))
+                            lambda properties_: (
+                                attr_name,
+                                getattr(self.model, attr_name).prop.mapper.class_.get_by_identifier(properties_)
+                            )
+                        )
 
         if imported_data:
             f_name = current_app.upload_set_config["documents"].tuple[0] + "/temp.csv"
@@ -1381,7 +1391,7 @@ class ModelView(BaseModelView):
                                 objects.append(class_(**properties_))
                             else:
                                 errors.append("* " + fb_gettext(
-                                    'Failed to find object pertaining to %(class_name)s'  +
+                                    'Failed to find object pertaining to %(class_name)s'
                                     ' that has the following properties %(properties_as_str)s',
                                     class_name=class_.__name__, properties_as_str=properties.__str__()
                                 ))
@@ -1392,10 +1402,10 @@ class ModelView(BaseModelView):
                         if obj_:
                             return obj_
                         elif self.create_object_if_not_exists:
-                            return class_(**properties_)
+                            return class_(**real_value)
                         else:
                             errors = "* " + fb_gettext(
-                                'Failed to find object pertaining to %(class_name)s' +
+                                'Failed to find object pertaining to %(class_name)s'
                                 ' that has the following properties %(properties_as_str)s',
                                 class_name=class_.__name__, properties_as_str=real_value.__str__()
                             )
