@@ -1351,66 +1351,67 @@ class ModelView(BaseModelView):
             result_as_file = open(f_name, 'w', newline='')
             writer = csv.writer(result_as_file)
             writer.writerow(headers + ["", "Created", "Modified", "Errors if they exist"])
+
+        def str2correct_type(string):
+            """Get a string and try to transform it to a python object.
+
+            for ex: string = "a" returns "a",
+                    string = "1" returns 1,
+                    string = '{"a": "b"}' returns {"a": "b"},
+                    string = "['s', 1, 'b']" returns ["s", 1, "b"]
+                    ...
+            """
+            try:
+                return ast.literal_eval(string)
+            except:
+                return string
+
+        def get_objects(attr_name, value):
+            """Returns object/objects that are of type attr_name.strip()).prop.mapper.class_.
+
+            Note: if the object doesn't exist we create a new one if the config :
+                    create_object_if_not_exists is set to True
+            for ex: if attr_name = professions and attr_name.strip()).prop.mapper.class_ is Profession
+                        and value is {"name": "Profession 1"} then it returns Profession(name="Profession 1")
+                    if instead of that, value is [{"name": "Profession 1"}, {"id": 2}], then it might returns
+                        [Profession(name="Profession 1"), Profession(id=2)]
+            """
+            errors = None
+            objects = []
+            real_value = str2correct_type(value)
+            if isinstance(real_value, list):
+                for properties_ in real_value:
+                    class_ = getattr(self.model, attr_name.strip()).prop.mapper.class_
+                    obj_ = class_.get_by_identifier(**properties_)
+                    errors = []
+                    if obj_:
+                        objects.append(obj_)
+                    elif self.create_object_if_not_exists:
+                        objects.append(class_(**properties_))
+                    else:
+                        errors.append("* " + fb_gettext(
+                            'Failed to find object pertaining to %(class_name)s'
+                            ' that has the following properties %(properties_as_str)s',
+                            class_name=class_.__name__, properties_as_str=properties_.__str__()
+                        ))
+                return objects, "; ".join(errors)
+            elif isinstance(real_value, dict):
+                class_ = getattr(self.model, attr_name.strip()).prop.mapper.class_
+                obj_ = class_.get_by_identifier(**real_value)
+                if obj_:
+                    return obj_
+                elif self.create_object_if_not_exists:
+                    return class_(**real_value)
+                else:
+                    errors = "* " + fb_gettext(
+                        'Failed to find object pertaining to %(class_name)s'
+                        ' that has the following properties %(properties_as_str)s',
+                        class_name=class_.__name__, properties_as_str=real_value.__str__()
+                    )
+            return value, errors  # value, errors
+
         for row in imported_data:
             try:
-                def str2correct_type(string):
-                    """Get a string and try to transform it to a python object.
-
-                    for ex: string = "a" returns "a",
-                            string = "1" returns 1,
-                            string = '{"a": "b"}' returns {"a": "b"},
-                            string = "['s', 1, 'b']" returns ["s", 1, "b"]
-                            ...
-                    """
-                    try:
-                        return ast.literal_eval(string)
-                    except:
-                        return string
-
-                def get_objects(attr_name, value):
-                    """Returns object/objects that are of type attr_name.strip()).prop.mapper.class_.
-
-                    Note: if the object doesn't exist we create a new one if the config :
-                            create_object_if_not_exists is set to True
-                    for ex: if attr_name = professions and attr_name.strip()).prop.mapper.class_ is Profession
-                                and value is {"name": "Profession 1"} then it returns Profession(name="Profession 1")
-                            if instead of that, value is [{"name": "Profession 1"}, {"id": 2}], then it might returns
-                                [Profession(name="Profession 1"), Profession(id=2)]
-                    """
-                    errors = None
-                    objects = []
-                    real_value = str2correct_type(value)
-                    if isinstance(real_value, list):
-                        for properties_ in real_value:
-                            class_ = getattr(self.model, attr_name.strip()).prop.mapper.class_
-                            obj_ = class_.get_by_identifier(**properties_)
-                            errors = []
-                            if obj_:
-                                objects.append(obj_)
-                            elif self.create_object_if_not_exists:
-                                objects.append(class_(**properties_))
-                            else:
-                                errors.append("* " + fb_gettext(
-                                    'Failed to find object pertaining to %(class_name)s'
-                                    ' that has the following properties %(properties_as_str)s',
-                                    class_name=class_.__name__, properties_as_str=properties.__str__()
-                                ))
-                        return objects, "; ".join(errors)
-                    elif isinstance(real_value, dict):
-                        class_ = getattr(self.model, attr_name.strip()).prop.mapper.class_
-                        obj_ = class_.get_by_identifier(**real_value)
-                        if obj_:
-                            return obj_
-                        elif self.create_object_if_not_exists:
-                            return class_(**real_value)
-                        else:
-                            errors = "* " + fb_gettext(
-                                'Failed to find object pertaining to %(class_name)s'
-                                ' that has the following properties %(properties_as_str)s',
-                                class_name=class_.__name__, properties_as_str=real_value.__str__()
-                            )
-                    return value, errors  # value, errors
-
                 # Try to see if the data provided reflect an existing object so the current operation will
                 # be an operation of modification of that object, or not so the operation will be an insertion
                 query = self.model.query
@@ -1460,6 +1461,8 @@ class ModelView(BaseModelView):
                 errors_.append("* " + str(ex))
 
                 self.session.rollback()
+
+                operation_done = False
 
             if is_there_a_modification:
                 writer.writerow(list(row) + ["", False, operation_done, '\n'.join(errors_)])
