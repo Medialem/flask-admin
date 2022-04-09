@@ -1294,7 +1294,7 @@ class ModelView(BaseModelView):
 
         headers = [key.strip() for key in imported_data.headers]
 
-        inspector = Inspector.from_engine(self.session.db.engine)
+        inspector = Inspector.from_engine(self.db.engine)
 
         # Get the primary keys of the model in hand
         pks = inspector.get_pk_constraint(self.model.__table__)
