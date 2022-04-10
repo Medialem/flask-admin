@@ -1347,7 +1347,10 @@ class ModelView(BaseModelView):
 
         if imported_data:
             f_name = current_app.upload_set_config["documents"].tuple[0] + "/temp.csv"
-            os.remove(f_name)
+            try:
+                os.remove(f_name)
+            except FileNotFoundError as ex:
+                pass
             result_as_file = open(f_name, 'w', newline='')
             writer = csv.writer(result_as_file)
             writer.writerow(headers + ["", "Created", "Modified", "Errors if they exist"])
