@@ -6,7 +6,7 @@ from sqlalchemy import Boolean, Column
 from sqlalchemy.orm import ColumnProperty
 
 from flask_admin import form
-from flask_admin.contrib.sqla.fields import InlineModelOneFormField
+from flask_admin.contrib.sqla.fields import InlineModelOneToOneField
 from flask_admin.model.form import (converts, ModelConverterBase,
                                     InlineModelConverterBase, FieldPlaceholder)
 from flask_admin.model.fields import AjaxSelectField, AjaxSelectMultipleField
@@ -579,7 +579,7 @@ class InlineModelConverter(InlineModelConverterBase):
     """
 
     inline_field_list_type = InlineModelFormList
-    inline_form_field_type = InlineModelOneFormField
+    inline_form_field_type = InlineModelOneToOneField
 
     """
         Used field list type.
