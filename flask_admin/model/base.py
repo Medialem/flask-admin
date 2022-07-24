@@ -1,3 +1,4 @@
+import os
 import warnings
 import re
 import csv
@@ -21,6 +22,7 @@ from flask_admin.babel import gettext, ngettext
 
 from flask_admin.base import BaseView, expose
 from flask_admin.form import BaseForm, FormOpts, rules
+from flask_admin.form.upload import FileUploadField
 from flask_admin.model import filters, typefmt, template
 from flask_admin.actions import ActionsMixin
 from flask_admin.helpers import (get_form_data, validate_form_on_submit,
@@ -87,7 +89,12 @@ class FilterGroup(object):
             copy['operation'] = as_unicode(copy['operation'])
             options = copy['options']
             if options:
-                copy['options'] = [(k, text_type(v)) for k, v in options]
+                # This was added because when working outside app context we can't inquire
+                # the db to get specific values being the options to show to the user so as
+                # a solution we send the options as a function that returns a query.
+                if callable(options):
+                    options = options()
+                copy['options'] = [(k, text_type(str(v))) for k, v in options]
 
             filters.append(copy)
         return as_unicode(self.label), filters
@@ -133,6 +140,12 @@ class BaseModelView(BaseView, ActionsMixin):
     can_export = False
     """Is model list export allowed"""
 
+    can_import = False
+    """Is model list import allowed"""
+
+    create_object_if_not_exists = False
+    """Is creating new objects if they do not exist allowed while importing."""
+
     # Templates
     list_template = 'admin/model/list.html'
     """Default list view template"""
@@ -146,6 +159,9 @@ class BaseModelView(BaseView, ActionsMixin):
     details_template = 'admin/model/details.html'
     """Default details view template"""
 
+    import_template = 'admin/model/import.html'
+    """Default import modal template"""
+
     # Modal Templates
     edit_modal_template = 'admin/model/modals/edit.html'
     """Default edit modal template"""
@@ -156,6 +172,9 @@ class BaseModelView(BaseView, ActionsMixin):
     details_modal_template = 'admin/model/modals/details.html'
     """Default details modal view template"""
 
+    import_modal_template = 'admin/model/modals/import.html'
+    """Default import modal template"""
+
     # Modals
     edit_modal = False
     """Setting this to true will display the edit_view as a modal dialog."""
@@ -165,6 +184,9 @@ class BaseModelView(BaseView, ActionsMixin):
 
     details_modal = False
     """Setting this to true will display the details_view as a modal dialog."""
+
+    import_modal = False
+    """Setting this to true will display the import_view as a modal dialog."""
 
     # Customizations
     column_list = ObsoleteAttr('column_list', 'list_columns', None)
@@ -760,6 +782,15 @@ class BaseModelView(BaseView, ActionsMixin):
         for supported types.
     """
 
+    import_types = ['csv', 'xlsx', 'xls']
+    """
+        A list of available import filetypes. `csv`, `xlsx`, `xls` are default, but any
+        filetypes supported by tablib can be used.
+
+        Check tablib for https://github.com/kennethreitz/tablib/blob/master/README.rst
+        for supported types.
+    """
+
     # Pagination settings
     page_size = 20
     """
@@ -834,6 +865,7 @@ class BaseModelView(BaseView, ActionsMixin):
         self._create_form_class = self.get_create_form()
         self._edit_form_class = self.get_edit_form()
         self._delete_form_class = self.get_delete_form()
+        self._import_form_class = self.get_import_form()
         self._action_form_class = self.get_action_form()
 
         # List View In-Line Editing
@@ -1309,6 +1341,20 @@ class BaseModelView(BaseView, ActionsMixin):
 
         return DeleteForm
 
+    def get_import_form(self):
+        """
+            Create form class for model import view.
+            Override to implement customized behavior.
+        """
+
+        def get_upload_path():
+            return os.path.join("./", "uploads", "import_files")
+
+        class ImportForm(self.form_base_class):
+            import_file = FileUploadField('Import File', base_path=get_upload_path(), allowed_extensions=self.import_types)
+
+        return ImportForm
+
     def get_action_form(self):
         """
             Create form class for a model action.
@@ -1362,6 +1408,13 @@ class BaseModelView(BaseView, ActionsMixin):
             Override to implement custom behavior.
         """
         return self._list_form_class(get_form_data(), obj=obj)
+
+    def import_form(self, obj=None):
+        """
+            Instantiate model import form and return it.
+            Override to implement custom behavior.
+        """
+        return self._import_form_class(get_form_data(), obj=obj)
 
     def action_form(self, obj=None):
         """
@@ -1565,17 +1618,8 @@ class BaseModelView(BaseView, ActionsMixin):
         """
             Compatibility helper.
         """
-        try:
-            self.on_model_change(form, model, is_created)
-        except TypeError as e:
-            if re.match(r'on_model_change\(\) takes .* 3 .* arguments .* 4 .* given .*', str(e)):
-                msg = ('%s.on_model_change() now accepts third ' +
-                       'parameter is_created. Please update your code') % self.model
-                warnings.warn(msg)
+        self.on_model_change(form, model, is_created)
 
-                self.on_model_change(form, model)
-            else:
-                raise
 
     def after_model_change(self, form, model, is_created):
         """
@@ -2231,6 +2275,44 @@ class BaseModelView(BaseView, ActionsMixin):
             flash_errors(form, message='Failed to delete record. %(error)s')
 
         return redirect(return_url)
+
+    @expose('/import/', methods=('GET', 'POST'))
+    def import_view(self):
+        """
+            Import model view
+        """
+        return_url = get_redirect_target() or self.get_url('.index_view')
+
+        if not self.can_import:
+            return redirect(return_url)
+
+        if tablib is None:
+            flash(gettext('Tablib dependency not installed.'), 'error')
+            return redirect(return_url)
+
+        form = self.import_form()
+
+        if self.validate_form(form):
+            result = self.import_model(form)
+            if result:
+                flash(gettext('Records were successfully imported.'), 'success')
+                return redirect(get_redirect_target() or self.get_url('.index_view'))
+            else:
+                flash(gettext("Failed to import Records."), "error")
+                return redirect(get_redirect_target() or self.get_url('.index_view'))
+
+        form_opts = FormOpts(widget_args=self.form_widget_args,
+                             form_rules=None)
+
+        if self.import_modal and request.args.get('modal'):
+            template = self.import_modal_template
+        else:
+            template = self.import_template
+
+        return self.render(template,
+                           form=form,
+                           form_opts=form_opts,
+                           return_url=return_url)
 
     @expose('/action/', methods=('POST',))
     def action_view(self):

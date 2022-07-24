@@ -100,7 +100,7 @@ class FilterInList(BaseSQLAFilter):
         super(FilterInList, self).__init__(column, name, options, data_type='select2-tags')
 
     def clean(self, value):
-        return [v.strip() for v in value.split(',') if v.strip()]
+        return [v.strip() for v in value.split('|') if v.strip()]
 
     def apply(self, query, value, alias=None):
         return query.filter(self.get_column(alias).in_(value))

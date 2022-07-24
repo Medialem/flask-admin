@@ -1,6 +1,8 @@
 flake8
 Flask>=0.7
 Flask-SQLAlchemy>=0.15
+Jinja2==2.11.3
+MarkupSafe==2.0.1
 peewee
 wtf-peewee
 mongoengine<=0.21.0

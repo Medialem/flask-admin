@@ -1,17 +1,24 @@
+import os
+import csv
+import ast
 import logging
 import warnings
 import inspect
 
+from flask_admin import expose
+from markupsafe import Markup
+from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.orm.base import manager_of_class, instance_state
-from sqlalchemy.orm import joinedload, aliased
+from sqlalchemy.orm import joinedload, aliased, ColumnProperty
 from sqlalchemy.sql.expression import desc
 from sqlalchemy import Boolean, Table, func, or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, DataError
 from sqlalchemy.sql.expression import cast
 from sqlalchemy import Unicode
 
 from flask import current_app, flash
+from flask_babelex import gettext as fb_gettext
 
 from flask_admin._compat import string_types, text_type
 from flask_admin.babel import gettext, ngettext, lazy_gettext
@@ -24,6 +31,10 @@ from flask_admin._backwards import ObsoleteAttr
 from flask_admin.contrib.sqla import form, filters as sqla_filters, tools
 from .typefmt import DEFAULT_FORMATTERS
 from .ajax import create_ajax_loader
+try:
+    import tablib
+except ImportError:
+    tablib = None
 
 # Set up logger
 log = logging.getLogger("flask-admin.sqla")
@@ -1129,6 +1140,18 @@ class ModelView(BaseModelView):
             else:
                 flash(gettext('Integrity error. %(message)s', message=text_type(exc)), 'error')
             return True
+        if isinstance(exc, DataError):
+            if current_app.config.get(
+                'ADMIN_RAISE_ON_INTEGRITY_ERROR',
+                current_app.config.get('ADMIN_RAISE_ON_VIEW_EXCEPTION')
+            ):
+                raise
+            else:
+                flash(
+                    fb_gettext('%(class_)s. %(message)s', class_=exc.orig.__class__.__name__, message=text_type(exc)),
+                    'error'
+                )
+            return True
 
         return super(ModelView, self).handle_view_exception(exc)
 
@@ -1146,6 +1169,22 @@ class ModelView(BaseModelView):
 
         return model
 
+    def before_model_change(self, form, model, is_created):
+        """
+            Perform some actions before the model change
+
+            Called from create_model before model updated with the new form values
+            By default does nothing.
+
+            :param form:
+                Form used to create/update model
+            :param model:
+                Model that was created/updated
+            :param is_created:
+                True if model was created, False if model was updated
+        """
+        pass
+
     # Model handlers
     def create_model(self, form):
         """
@@ -1156,7 +1195,12 @@ class ModelView(BaseModelView):
         """
         try:
             model = self.build_new_instance()
+            # TODO: We need a better way to create model instances and stay compatible with
+            # SQLAlchemy __init__() behavior
+            state = instance_state(model)
+            self._manager.dispatch.init(state, [], {})
 
+            self.before_model_change(form, model, True)
             form.populate_obj(model)
             self.session.add(model)
             self._on_model_change(form, model, True)
@@ -1165,6 +1209,10 @@ class ModelView(BaseModelView):
             if not self.handle_view_exception(ex):
                 flash(gettext('Failed to create record. %(error)s', error=str(ex)), 'error')
                 log.exception('Failed to create record.')
+
+                # sometime the flashed message does not contain the exception text "I don't know why!!!"
+                # and we need to log the exception
+                current_app.log_exception(ex)
 
             self.session.rollback()
 
@@ -1184,6 +1232,7 @@ class ModelView(BaseModelView):
                 Model instance
         """
         try:
+            self.before_model_change(form, model, False)
             form.populate_obj(model)
             self._on_model_change(form, model, False)
             self.session.commit()
@@ -1191,6 +1240,10 @@ class ModelView(BaseModelView):
             if not self.handle_view_exception(ex):
                 flash(gettext('Failed to update record. %(error)s', error=str(ex)), 'error')
                 log.exception('Failed to update record.')
+
+                # sometime the flashed message does not contain the exception text "I don't know why!!!"
+                # and we need to log the exception
+                current_app.log_exception(ex)
 
             self.session.rollback()
 
@@ -1217,11 +1270,234 @@ class ModelView(BaseModelView):
                 flash(gettext('Failed to delete record. %(error)s', error=str(ex)), 'error')
                 log.exception('Failed to delete record.')
 
+                # sometime the flashed message does not contain the exception text "I don't know why!!!"
+                # and we need to log the exception
+                current_app.log_exception(ex)
+
             self.session.rollback()
 
             return False
         else:
             self.after_model_delete(model)
+
+        return True
+
+    def import_model(self, form):
+        """
+            Import model from form.
+            :param form:
+                Form instance
+        """
+        filename = form.import_file.data.filename.lower()
+
+        if any([filename.endswith(_format) for _format in self.import_types]):
+            file_content = form.import_file.data.stream.read()
+            try:
+                imported_data = tablib.Dataset().load(
+                    file_content.decode("utf-8"),
+                    format=filename.split(".")[-1]
+                )
+            except UnicodeDecodeError:
+                try:
+                    imported_data = tablib.Dataset().load(
+                        file_content.decode("windows-1252"),
+                        format=filename.split(".")[-1]
+                    )
+                except Exception as ex:
+                    if not self.handle_view_exception(ex):
+                        flash(gettext('Failed to import file. %(error)s', error=str(ex)), 'error')
+                        log.exception('Failed to import file.')
+        else:
+            flash(gettext('Failed to import file. Not acceptable format'), 'error')
+            log.exception('Failed to import file. Not acceptable format')
+
+            return False
+
+        headers = [key.strip() for key in imported_data.headers]
+
+        inspector = Inspector.from_engine(self.db.engine)
+
+        # Get the primary keys of the model in hand
+        pks = inspector.get_pk_constraint(self.model.__table__)
+        del pks['constrained_columns']
+        pks = list(pks.keys())
+
+        # Check if the PK is in the column provided in data
+        attrs = set([])  # aims to hold the attrs names of type ColumnProperty and the attrs names + "_id" else (Rel.P.)
+        for attr_name in headers:
+            if isinstance(getattr(self.model, attr_name).prop, ColumnProperty):
+                attrs.add(attr_name)
+            elif hasattr(self.model, attr_name + "_id"):
+                attrs.add(attr_name + "_id")
+
+        attributes_to_check = []
+        if all(pk in attrs for pk in pks):
+            for pk in pks:
+                if pk in headers:
+                    attributes_to_check.append(pk)
+                else:
+                    # Foreign Key : (pk, )
+                    attributes_to_check.append(
+                        lambda properties_: (
+                                pk,
+                                getattr(self.model, attr_name).prop.mapper.class_.get_by_identifier(properties_)
+                            )
+                    )
+        else:
+            # Check all the unique constraints
+            ucs = []
+            for uc_tuple in inspector.get_unique_constraints(self.model.__table__):
+                del uc_tuple["column_names"]
+                ucs.append(list(uc_tuple.keys()))
+
+            # ucs = [tuple1, tuple2, ...]
+            # Keep only the tuple where all the attributes are in attrs
+            existed_tuples_ucs = [uc_tuple for uc_tuple in ucs if any(attr in attrs for attr in uc_tuple)]
+            for uc_tuple in existed_tuples_ucs:
+                for attr_name in uc_tuple:
+                    if attr_name in headers:
+                        attributes_to_check.append(attr_name)
+                    else:
+                        # Foreign Key : (pk, )
+                        attributes_to_check.append(
+                            lambda properties_: (
+                                attr_name,
+                                getattr(self.model, attr_name).prop.mapper.class_.get_by_identifier(properties_)
+                            )
+                        )
+
+        if imported_data:
+            f_name = current_app.upload_set_config["documents"].tuple[0] + "/temp.csv"
+            try:
+                os.remove(f_name)
+            except FileNotFoundError as ex:
+                pass
+            result_as_file = open(f_name, 'w', newline='')
+            writer = csv.writer(result_as_file)
+            writer.writerow(headers + ["", "Created", "Modified", "Errors if they exist"])
+
+        def str2correct_type(string):
+            """Get a string and try to transform it to a python object.
+
+            for ex: string = "a" returns "a",
+                    string = "1" returns 1,
+                    string = '{"a": "b"}' returns {"a": "b"},
+                    string = "['s', 1, 'b']" returns ["s", 1, "b"]
+                    ...
+            """
+            try:
+                return ast.literal_eval(string)
+            except:
+                return string
+
+        def get_objects(attr_name, value):
+            """Returns object/objects that are of type attr_name.strip()).prop.mapper.class_.
+
+            Note: if the object doesn't exist we create a new one if the config :
+                    create_object_if_not_exists is set to True
+            for ex: if attr_name = professions and attr_name.strip()).prop.mapper.class_ is Profession
+                        and value is {"name": "Profession 1"} then it returns Profession(name="Profession 1")
+                    if instead of that, value is [{"name": "Profession 1"}, {"id": 2}], then it might returns
+                        [Profession(name="Profession 1"), Profession(id=2)]
+            """
+            errors = None
+            objects = []
+            real_value = str2correct_type(value)
+            if isinstance(real_value, list):
+                for properties_ in real_value:
+                    class_ = getattr(self.model, attr_name.strip()).prop.mapper.class_
+                    obj_ = class_.get_by_identifier(**properties_)
+                    errors = []
+                    if obj_:
+                        objects.append(obj_)
+                    elif self.create_object_if_not_exists:
+                        objects.append(class_(**properties_))
+                    else:
+                        errors.append("* " + fb_gettext(
+                            'Failed to find object pertaining to %(class_name)s'
+                            ' that has the following properties %(properties_as_str)s',
+                            class_name=class_.__name__, properties_as_str=properties_.__str__()
+                        ))
+                return objects, "; ".join(errors)
+            elif isinstance(real_value, dict):
+                class_ = getattr(self.model, attr_name.strip()).prop.mapper.class_
+                obj_ = class_.get_by_identifier(**real_value)
+                if obj_:
+                    return obj_
+                elif self.create_object_if_not_exists:
+                    return class_(**real_value)
+                else:
+                    errors = "* " + fb_gettext(
+                        'Failed to find object pertaining to %(class_name)s'
+                        ' that has the following properties %(properties_as_str)s',
+                        class_name=class_.__name__, properties_as_str=real_value.__str__()
+                    )
+            return value, errors  # value, errors
+
+        for row in imported_data:
+            try:
+                # Try to see if the data provided reflect an existing object so the current operation will
+                # be an operation of modification of that object, or not so the operation will be an insertion
+                query = self.model.query
+                row_map = {key: row[i].strip() for i, key in enumerate(headers)}
+                for attr_name in attributes_to_check:
+                    if not callable(attr_name):
+                        query = query.filter_by(**{attr_name: row_map[attr_name]})
+                    else:
+                        query = query.join(getattr(self.model, attr_name)).filter_by(**{attr_name: row_map[attr_name]})
+                obj = query.first()
+                errors_ = []
+                is_there_a_modification = True if obj else False
+
+                # aims to detect if the ongoing operation (Modification/ Insertion) was successfully done or not
+                operation_done = True
+
+                if is_there_a_modification:
+                    # Modification
+                    for i, key in enumerate(headers):
+                        if hasattr(obj, key):
+                            value = str2correct_type(row[i].strip()) if isinstance(
+                                getattr(self.model, key).prop, ColumnProperty) else get_objects(
+                                key, row[i].strip())
+                            if not isinstance(value, tuple) or value[1] is None:
+                                setattr(obj, key, value)
+                            else:
+                                operation_done = False
+                                errors_.append(value[1])
+                else:
+                    # Insertion
+                    properties = {}
+                    for i, key in enumerate(headers):
+                        value = str2correct_type(row[i].strip()) if isinstance(
+                                getattr(self.model, key).prop, ColumnProperty) else get_objects(
+                                key, row[i].strip())
+
+                        if not isinstance(value, tuple) or value[1] is None:
+                            properties[key] = value
+                        else:
+                            operation_done = False
+                            errors_.append(value[1])
+
+                    obj = self.model(**properties)
+                self.session.add(obj)
+                self.session.commit()
+            except Exception as ex:
+                errors_.append("* " + str(ex))
+
+                self.session.rollback()
+
+                operation_done = False
+
+            if is_there_a_modification:
+                writer.writerow(list(row) + ["", False, operation_done, '\n'.join(errors_)])
+            else:
+                writer.writerow(list(row) + ["", operation_done, False, '\n'.join(errors_)])
+
+        result_as_file.close()
+
+        flash(Markup(f'''
+        <a href={"/_" + f_name.split("static")[1][1:]} target="_blank" download>Download Result</a>       
+        '''))
 
         return True
 

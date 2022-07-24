@@ -72,6 +72,8 @@ setup(
         'shapely',
         'geoalchemy2',
         'psycopg2',
+        'Jinja2==2.11.3',
+        'MarkupSafe==2.0.1'
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
