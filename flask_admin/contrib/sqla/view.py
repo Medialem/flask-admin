@@ -1369,7 +1369,7 @@ class ModelView(BaseModelView):
 
         if imported_data:
             # Build path to documents if it doesn't exist
-            if os.path.exists(current_app.upload_set_config["documents"].tuple[0]):
+            if not os.path.exists(current_app.upload_set_config["documents"].tuple[0]):
                 os.makedirs(current_app.upload_set_config["documents"].tuple[0])
             f_name = current_app.upload_set_config["documents"].tuple[0] + "/temp.csv"
             with contextlib.suppress(FileNotFoundError):
