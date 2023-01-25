@@ -1466,11 +1466,11 @@ class ModelView(BaseModelView):
                                 raise Exception(f"Error in row : {row}, <<A foreign key relation <{rel_name}> has to have a dict object.>>")
                             
                     all_found_objs = query.all()
-                    if not all_found_objs and len(all_found_objs) > 1:
-                        is_there_a_modification = False
-                    else:
+                    if len(all_found_objs) == 1:
                         obj = all_found_objs[0]
                         is_there_a_modification = True
+                    else:
+                        is_there_a_modification = False
                     
                     # aims to detect if the ongoing operation (Modification/ Insertion) was successfully done or not
                     operation_done = True
