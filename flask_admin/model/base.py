@@ -1350,7 +1350,7 @@ class BaseModelView(BaseView, ActionsMixin):
         def get_upload_path():
             return os.path.join("./", "uploads", "import_files")
 
-        class ImportForm(self.form_base_class):
+        class ImportForm(BaseForm):
             import_file = FileUploadField('Import File', base_path=get_upload_path(), allowed_extensions=self.import_types)
 
         return ImportForm
