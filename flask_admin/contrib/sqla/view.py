@@ -1208,6 +1208,8 @@ class ModelView(BaseModelView):
             self._on_model_change(form, model, True)
             self.session.commit()
         except Exception as ex:
+            self.session.rollback()
+            
             if not self.handle_view_exception(ex):
                 flash(gettext('Failed to create record. %(error)s', error=str(ex)), 'error')
                 log.exception('Failed to create record.')
@@ -1215,8 +1217,6 @@ class ModelView(BaseModelView):
                 # sometime the flashed message does not contain the exception text "I don't know why!!!"
                 # and we need to log the exception
                 current_app.log_exception(ex)
-
-            self.session.rollback()
 
             return False
         else:
