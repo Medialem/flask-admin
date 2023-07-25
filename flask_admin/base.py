@@ -597,7 +597,7 @@ class Admin(object):
         """
         cat_text = as_unicode(name)
 
-        category = self.get_category_menu_item(name)
+        category = self.get_category_menu_item(cat_text)
         if category:
             return
 
