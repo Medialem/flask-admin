@@ -20,7 +20,7 @@ from sqlalchemy.sql.expression import cast
 from sqlalchemy import Unicode
 
 from flask import current_app, flash
-from flask_babelex import gettext as fb_gettext
+from flask_babel import gettext as fb_gettext
 
 from flask_admin._compat import string_types, text_type
 from flask_admin.babel import gettext, ngettext, lazy_gettext

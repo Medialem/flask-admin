@@ -68,7 +68,7 @@ setup(
         'sqlalchemy',
         'flask-mongoengine<=0.21.0',
         'flask-sqlalchemy',
-        'flask-babelex',
+        'flask-babel==2.0.0',
         'shapely',
         'geoalchemy2',
         'psycopg2',

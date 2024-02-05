@@ -122,6 +122,6 @@ You can also run the tests on multiple environments using *tox*.
 Flask-Admin is built with the help of `Bootstrap <http://getbootstrap.com/>`_,  `Select2 <https://github.com/ivaynberg/select2>`_
 and `Bootswatch <http://bootswatch.com/>`_.
 
-If you want to localize your application, install the `Flask-BabelEx <https://pypi.python.org/pypi/Flask-BabelEx>`_ package.
+If you want to localize your application, install the `Flask-Babel <https://pypi.org/project/flask-babel/`_ package.
 
 You can help improve Flask-Admin's translations through Crowdin: https://crowdin.com/project/flask-admin
