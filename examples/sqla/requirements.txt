@@ -1,6 +1,6 @@
 Flask
 Flask-Admin
-Flask-BabelEx
+Flask-Babel==2.0.0
 Flask-SQLAlchemy
 tablib
 enum34; python_version < '3.0'
