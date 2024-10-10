@@ -1292,19 +1292,25 @@ class ModelView(BaseModelView):
         """
         try:
             filename = form.import_file.data.filename.lower()
+            file_format = filename.split(".")[-1].lower()
+            binary_file_formats = ['xlsx', 'xls']
 
             if any([filename.endswith(_format) for _format in self.import_types]):
                 file_content = form.import_file.data.stream.read()
                 try:
                     imported_data = tablib.Dataset().load(
-                        file_content.decode("utf-8"),
-                        format=filename.split(".")[-1]
+                        file_content
+                        if file_format in binary_file_formats
+                        else file_content.decode("utf-8"),
+                        format=file_format,
                     )
                 except UnicodeDecodeError:
                     try:
                         imported_data = tablib.Dataset().load(
-                            file_content.decode("windows-1252"),
-                            format=filename.split(".")[-1]
+                            file_content
+                            if file_format in binary_file_formats
+                            else file_content.decode("utf-8"),
+                            format=file_format,
                         )
                     except Exception as ex:
                         if not self.handle_view_exception(ex):
@@ -1315,6 +1321,9 @@ class ModelView(BaseModelView):
                 log.exception('Failed to import file. Not acceptable format')
 
                 return False
+
+            for column in getattr(self, 'column_import_skip_list', []):
+                del imported_data[column]
 
             headers = [key.strip() for key in imported_data.headers]
 
@@ -1394,7 +1403,7 @@ class ModelView(BaseModelView):
                 """
                 try:
                     return ast.literal_eval(string)
-                except:
+                except Exception:
                     return string
 
             def get_objects(attr_name, value):
