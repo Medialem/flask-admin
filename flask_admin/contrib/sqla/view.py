@@ -1322,8 +1322,9 @@ class ModelView(BaseModelView):
 
                 return False
 
-            for column in getattr(self, 'column_import_skip_list', []):
-                del imported_data[column]
+            for column in getattr(self, "column_import_skip_list", []):
+                if column in imported_data.headers:
+                    del imported_data[column]
 
             headers = [key.strip() for key in imported_data.headers]
 
