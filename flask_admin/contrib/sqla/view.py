@@ -1334,7 +1334,7 @@ class ModelView(BaseModelView):
             
             model_mapper = sq_inspect(self.model)
 
-            primary_key_columns_names_in_db = [column.name for column in model_mapper.primary_key]
+            primary_key_columns_names_in_db = [column.name for column in self.model.__table__.primary_key.columns]
 
             primary_key_columns_names_in_models = [
                 column_name for (column_name, column) in model_mapper.attrs.items()
